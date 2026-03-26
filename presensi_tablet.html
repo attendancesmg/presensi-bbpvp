@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Presensi Apel BBPVP Semarang</title>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #1a1a1a; color: white; margin: 0; padding: 20px; }
+        #container { max-width: 800px; margin: auto; display: flex; flex-direction: column; align-items: center; }
+        video { border: 4px solid #444; border-radius: 15px; width: 100%; max-width: 600px; background: #000; transform: scaleX(-1); }
+        #info { margin-top: 20px; padding: 20px; border-radius: 10px; font-size: 1.2em; font-weight: bold; width: 90%; transition: 0.3s; min-height: 30px; }
+        .status-loading { background: #f39c12; color: black; }
+        .status-ready { background: #3498db; color: white; }
+        .status-success { background: #27ae60; color: white; }
+        .status-error { background: #e74c3c; color: white; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <h2>SISTEM PRESENSI APEL BBPVP</h2>
+    <video id="video" autoplay muted playsinline></video>
+    <div id="info" class="status-loading">Menginisialisasi Sistem...</div>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const info = document.getElementById('info');
+    
+    // PASTIKAN LINK INI ADALAH URL DEPLOYMENT TERBARU ANDA
+    const API_URL = "https://script.google.com/macros/s/AKfycbwK__hE9P-yA6L-e8DogXFkUZFX8MFABAIJGgkh52Mi7Z2qQyhWpSM9W-FdxEV0X3sL/exec";
+    
+    let labeledDescriptors = [];
+    let isProcessing = false;
+
+    async function init() {
+        const MODEL_URL = 'https://raw.githubusercontent.com/ml5js/ml5-data-and-models/main/models/faceapi/';
+        
+        try {
+            info.innerText = "⏳ Memuat Model AI...";
+            await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+            await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+            await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+
+            info.innerText = "⏳ Mengambil Database Wajah...";
+            // Menambahkan timestamp agar data tidak cache
+            const response = await fetch(API_URL + "?t=" + Date.now());
+            const data = await response.json();
+            
+            if (!data || data.length === 0) {
+                info.innerText = "⚠️ Database Kosong atau Gagal Dimuat!";
+                info.className = "status-error";
+                return;
+            }
+
+            labeledDescriptors = data.map(user => {
+                // Konversi objek descriptor kembali ke Float32Array
+                const descValues = Object.values(user.descriptor);
+                const descArray = new Float32Array(descValues);
+                return new faceapi.LabeledFaceDescriptors(user.nama + "|" + user.nip, [descArray]);
+            });
+
+            startVideo();
+        } catch (err) {
+            console.error(err);
+            info.innerText = "❌ Gagal Terhubung! Cek URL & Pastikan Set 'Anyone'.";
+            info.className = "status-error";
+        }
+    }
+
+    async function startVideo() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+            video.srcObject = stream;
+            info.innerText = "✅ SIAP! Silakan Menghadap Kamera";
+            info.className = "status-ready";
+            recognizeFace();
+        } catch (err) {
+            info.innerText = "❌ Kamera Tidak Aktif (Gunakan HTTPS)!";
+            info.className = "status-error";
+        }
+    }
+
+    async function recognizeFace() {
+        const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.35);
+
+        setInterval(async () => {
+            if (isProcessing) return;
+
+            const detections = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
+
+            if (detections.length > 0) {
+                const bestMatch = faceMatcher.findBestMatch(detections[0].descriptor);
+                
+                if (bestMatch.label !== 'unknown') {
+                    const [nama, nip] = bestMatch.label.split('|');
+                    submitPresence(nama, nip);
+                }
+            }
+        }, 1000);
+    }
+
+    async function submitPresence(nama, nip) {
+        isProcessing = true;
+        info.innerText = `🔍 Memproses: ${nama}...`;
+        info.className = "status-loading";
+        
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                body: JSON.stringify({ nama: nama, nip: nip })
+            });
+
+            const hasil = await response.text();
+
+            if (hasil.includes("Berhasil") || hasil.includes("Sukses")) {
+                info.innerText = `⭐ ${hasil}: ${nama}`;
+                info.className = "status-success";
+            } else {
+                info.innerText = `⚠️ ${hasil}`;
+                info.className = "status-error";
+            }
+            
+            // Jeda agar tidak scan beruntun
+            setTimeout(() => {
+                if (video.srcObject) {
+                    info.innerText = "✅ SIAP! Silakan Menghadap Kamera";
+                    info.className = "status-ready";
+                    isProcessing = false;
+                }
+            }, 4000);
+
+        } catch (err) {
+            console.error(err);
+            info.innerText = "❌ Gangguan Koneksi ke Server!";
+            info.className = "status-error";
+            setTimeout(() => { isProcessing = false; }, 3000);
+        }
+    }
+
+    init();
+</script>
+</body>
+</html>
